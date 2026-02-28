@@ -1,0 +1,16 @@
+# Build folders
+build/
+bin/
+
+# Object files
+*.o
+*.obj
+*.so
+*.a
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
