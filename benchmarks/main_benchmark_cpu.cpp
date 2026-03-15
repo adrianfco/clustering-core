@@ -1,5 +1,5 @@
-#include "../include/kmeans.hpp"
-#include "../include/pfcm.hpp"
+#include "clustering_core/kmeans.hpp"
+#include "clustering_core/pfcm.hpp"
 #include <vector>
 #include <iostream>
 

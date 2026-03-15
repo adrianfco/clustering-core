@@ -1,4 +1,4 @@
-#include "tif_loader.hpp"
+#include "clustering_core/tif_loader.hpp"
 #include <gdal_priv.h>
 #include <stdexcept>
 #include <string>

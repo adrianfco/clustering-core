@@ -1,4 +1,4 @@
-#include "pfcm.hpp"
+#include "clustering_core/pfcm.hpp"
 #include <iostream>
 
 PFCM::PFCM(int c, int max_iters, double m, double alpha)
