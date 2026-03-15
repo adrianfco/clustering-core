@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "kmeans.hpp"
+#include "clustering_core/kmeans.hpp"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
