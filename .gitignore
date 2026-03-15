@@ -14,3 +14,8 @@ bin/
 
 # OS
 .DS_Store
+
+# Sample data (place .tif files in data/ for local testing, do not commit)
+data/*.tif
+data/*.img
+data/*.vrt
