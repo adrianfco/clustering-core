@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "clustering_core/pfcm.hpp"
+#include <cmath>
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -113,7 +114,7 @@ TEST_CASE("PFCM membership matrix shape and FCM row-sum constraint") {
         double sum = 0.0;
         for (int i = 0; i < 2; ++i)
             sum += U[i][j];
-        REQUIRE(sum == Catch::Approx(1.0).epsilon(1e-9));
+        REQUIRE(std::abs(sum - 1.0) < 1e-9);
     }
 }
 

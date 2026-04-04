@@ -2,6 +2,7 @@
 #include "utils.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <random>
 
@@ -17,14 +18,26 @@ void PFCM::fit(const std::vector<std::vector<double>>& data) {
 
     std::mt19937 rng(static_cast<unsigned>(seed_));
 
-    // Random init: same shuffle-and-take pattern as KMeans
-    std::vector<int> idx(n);
-    std::iota(idx.begin(), idx.end(), 0);
-    std::shuffle(idx.begin(), idx.end(), rng);
-
+    // Max-min init: pick first center randomly, then each subsequent center as
+    // the point farthest from all already-selected centers. This guarantees
+    // spread and avoids the degenerate case where soft-membership FCM/PFCM
+    // collapses when two centers start at the same location.
     centers_.assign(effective_c, std::vector<double>(dims));
-    for (int i = 0; i < effective_c; ++i)
-        centers_[i] = data[idx[i]];
+    std::uniform_int_distribution<int> dist(0, n - 1);
+    centers_[0] = data[dist(rng)];
+    for (int ci = 1; ci < effective_c; ++ci) {
+        int best_j = 0;
+        double best_dist = -1.0;
+        for (int j = 0; j < n; ++j) {
+            double min_d = std::numeric_limits<double>::max();
+            for (int k = 0; k < ci; ++k) {
+                double d = euclidean_distance(centers_[k], data[j]);
+                if (d < min_d) min_d = d;
+            }
+            if (min_d > best_dist) { best_dist = min_d; best_j = j; }
+        }
+        centers_[ci] = data[best_j];
+    }
 
     U_.assign(effective_c, std::vector<double>(n, 0.0));
     T_.assign(effective_c, std::vector<double>(n, 0.0));
