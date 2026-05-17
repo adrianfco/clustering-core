@@ -5,10 +5,10 @@
 #include <numeric>
 #include <random>
 
-KMeans::KMeans(int k, int max_iters, double tol, int seed)
+KMeans::KMeans(int k, int max_iters, float tol, int seed)
     : k_(k), max_iters_(max_iters), tol_(tol), seed_(seed) {}
 
-void KMeans::fit(const std::vector<std::vector<double>>& data) {
+void KMeans::fit(const std::vector<std::vector<float>>& data) {
     const int n = static_cast<int>(data.size());
     if (n == 0) return;
 
@@ -22,7 +22,7 @@ void KMeans::fit(const std::vector<std::vector<double>>& data) {
     std::iota(idx.begin(), idx.end(), 0);
     std::shuffle(idx.begin(), idx.end(), rng);
 
-    std::vector<std::vector<double>> centroids(effective_k, std::vector<double>(dims));
+    std::vector<std::vector<float>> centroids(effective_k, std::vector<float>(dims));
     for (int c = 0; c < effective_k; ++c)
         centroids[c] = data[idx[c]];
 
@@ -33,9 +33,9 @@ void KMeans::fit(const std::vector<std::vector<double>>& data) {
         std::vector<int> new_labels(n);
         for (int p = 0; p < n; ++p) {
             int best_c = 0;
-            double best_dist = euclidean_distance(data[p], centroids[0]);
+            float best_dist = euclidean_distance(data[p], centroids[0]);
             for (int c = 1; c < effective_k; ++c) {
-                double d = euclidean_distance(data[p], centroids[c]);
+                float d = euclidean_distance(data[p], centroids[c]);
                 if (d < best_dist) {
                     best_dist = d;
                     best_c = c;
@@ -45,7 +45,7 @@ void KMeans::fit(const std::vector<std::vector<double>>& data) {
         }
 
         // Update centroids as mean of assigned points
-        std::vector<std::vector<double>> new_centroids(effective_k, std::vector<double>(dims, 0.0));
+        std::vector<std::vector<float>> new_centroids(effective_k, std::vector<float>(dims, 0.f));
         std::vector<int> counts(effective_k, 0);
         for (int p = 0; p < n; ++p) {
             int c = new_labels[p];
@@ -59,14 +59,14 @@ void KMeans::fit(const std::vector<std::vector<double>>& data) {
                 new_centroids[c] = data[rng() % static_cast<unsigned>(n)];
             } else {
                 for (int d = 0; d < dims; ++d)
-                    new_centroids[c][d] /= counts[c];
+                    new_centroids[c][d] /= static_cast<float>(counts[c]);
             }
         }
 
         // Check convergence: max centroid shift
-        double max_shift = 0.0;
+        float max_shift = 0.f;
         for (int c = 0; c < effective_k; ++c) {
-            double shift = euclidean_distance(centroids[c], new_centroids[c]);
+            float shift = euclidean_distance(centroids[c], new_centroids[c]);
             if (shift > max_shift) max_shift = shift;
         }
 

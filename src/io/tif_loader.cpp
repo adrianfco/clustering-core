@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-std::vector<std::vector<double>> TifLoader::load(const std::string& path) {
+std::vector<std::vector<float>> TifLoader::load(const std::string& path) {
     GDALAllRegister();
 
     GDALDataset* dataset = static_cast<GDALDataset*>(
@@ -23,7 +23,7 @@ std::vector<std::vector<double>> TifLoader::load(const std::string& path) {
     }
 
     const int n_pixels = width * height;
-    std::vector<std::vector<double>> result(n_pixels, std::vector<double>(n_bands));
+    std::vector<std::vector<float>> result(n_pixels, std::vector<float>(n_bands));
     std::vector<float> band_buf(n_pixels);
 
     for (int b = 1; b <= n_bands; ++b) {
@@ -47,7 +47,7 @@ std::vector<std::vector<double>> TifLoader::load(const std::string& path) {
         }
 
         for (int p = 0; p < n_pixels; ++p)
-            result[p][b - 1] = static_cast<double>(band_buf[p]);
+            result[p][b - 1] = band_buf[p];
     }
 
     GDALClose(dataset);

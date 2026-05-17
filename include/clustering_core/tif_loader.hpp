@@ -8,5 +8,5 @@ public:
     // each spectral band becomes one feature (dimension).
     // Returns: vector of n_pixels vectors of length n_bands.
     // Throws: std::runtime_error on open or read failure.
-    static std::vector<std::vector<double>> load(const std::string& path);
+    static std::vector<std::vector<float>> load(const std::string& path);
 };

@@ -3,14 +3,14 @@
 
 class PFCM {
 public:
-    PFCM(int c, int max_iters, double m, double alpha);
-    void fit(const std::vector<std::vector<double>>& data);
+    PFCM(int c, int max_iters, float m, float alpha);
+    void fit(const std::vector<std::vector<float>>& data);
     const std::vector<int>& labels() const;
 
 private:
     int c_;
     int max_iters_;
-    double m_;
-    double alpha_;
+    float m_;
+    float alpha_;
     std::vector<int> labels_;
 };

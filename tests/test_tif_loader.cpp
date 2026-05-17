@@ -106,7 +106,7 @@ TEST_CASE("TifLoader output is compatible with KMeans") {
     auto data = TifLoader::load(path);
     REQUIRE(data.size() == static_cast<std::size_t>(n_pixels));
 
-    KMeans km(2, 200, 1e-6, 42);
+    KMeans km(2, 200, 1e-6f, 42);
     km.fit(data);
 
     REQUIRE(km.labels().size() == static_cast<std::size_t>(n_pixels));
