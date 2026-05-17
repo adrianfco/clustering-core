@@ -62,4 +62,11 @@ if(CUDA_FOUND)
 
     add_executable(benchmark_cuda benchmarks/main_benchmark_cuda.cu)
     target_link_libraries(benchmark_cuda PRIVATE clustering_cuda)
+
+    add_executable(test_clustering_gpu tests/test_kmeans_gpu.cpp)
+    target_link_libraries(test_clustering_gpu PRIVATE
+        clustering_cuda
+        Catch2::Catch2WithMain
+    )
+    catch_discover_tests(test_clustering_gpu)
 endif()
