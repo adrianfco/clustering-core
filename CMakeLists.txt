@@ -38,6 +38,7 @@ enable_testing()
 add_executable(test_clustering
     tests/main_test.cpp
     tests/test_tif_loader.cpp
+    tests/test_pfcm.cpp
 )
 target_link_libraries(test_clustering PRIVATE
     clustering_cpu
