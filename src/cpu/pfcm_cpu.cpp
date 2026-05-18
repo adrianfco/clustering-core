@@ -6,10 +6,10 @@
 #include <numeric>
 #include <random>
 
-PFCM::PFCM(int c, int max_iters, double m, double alpha, double tol, int seed)
+PFCM::PFCM(int c, int max_iters, float m, float alpha, float tol, int seed)
     : c_(c), max_iters_(max_iters), m_(m), alpha_(alpha), tol_(tol), seed_(seed) {}
 
-void PFCM::fit(const std::vector<std::vector<double>>& data) {
+void PFCM::fit(const std::vector<std::vector<float>>& data) {
     const int n = static_cast<int>(data.size());
     if (n == 0) return;
 
@@ -22,16 +22,16 @@ void PFCM::fit(const std::vector<std::vector<double>>& data) {
     // the point farthest from all already-selected centers. This guarantees
     // spread and avoids the degenerate case where soft-membership FCM/PFCM
     // collapses when two centers start at the same location.
-    centers_.assign(effective_c, std::vector<double>(dims));
+    centers_.assign(effective_c, std::vector<float>(dims));
     std::uniform_int_distribution<int> dist(0, n - 1);
     centers_[0] = data[dist(rng)];
     for (int ci = 1; ci < effective_c; ++ci) {
         int best_j = 0;
-        double best_dist = -1.0;
+        float best_dist = -1.0;
         for (int j = 0; j < n; ++j) {
-            double min_d = std::numeric_limits<double>::max();
+            float min_d = std::numeric_limits<float>::max();
             for (int k = 0; k < ci; ++k) {
-                double d = euclidean_distance(centers_[k], data[j]);
+                float d = euclidean_distance(centers_[k], data[j]);
                 if (d < min_d) min_d = d;
             }
             if (min_d > best_dist) { best_dist = min_d; best_j = j; }
@@ -39,19 +39,19 @@ void PFCM::fit(const std::vector<std::vector<double>>& data) {
         centers_[ci] = data[best_j];
     }
 
-    U_.assign(effective_c, std::vector<double>(n, 0.0));
-    T_.assign(effective_c, std::vector<double>(n, 0.0));
+    U_.assign(effective_c, std::vector<float>(n, 0.0));
+    T_.assign(effective_c, std::vector<float>(n, 0.0));
     gamma_.assign(effective_c, 1.0);
 
-    const double exp_um = 1.0 / (m_ - 1.0); // exponent for U and T updates
+    const float exp_um = 1.0 / (m_ - 1.0); // exponent for U and T updates
 
     for (int iter = 0; iter < max_iters_; ++iter) {
 
         // ── 1. Compute squared distances d²[i][j] ────────────────────────────
-        std::vector<std::vector<double>> dsq(effective_c, std::vector<double>(n));
+        std::vector<std::vector<float>> dsq(effective_c, std::vector<float>(n));
         for (int i = 0; i < effective_c; ++i)
             for (int j = 0; j < n; ++j) {
-                double d = euclidean_distance(centers_[i], data[j]);
+                float d = euclidean_distance(centers_[i], data[j]);
                 dsq[i][j] = d * d;
             }
 
@@ -64,12 +64,12 @@ void PFCM::fit(const std::vector<std::vector<double>>& data) {
                 if (dsq[i][j] == 0.0) ++zero_count;
 
             if (zero_count > 0) {
-                double share = 1.0 / zero_count;
+                float share = 1.0 / zero_count;
                 for (int i = 0; i < effective_c; ++i)
                     U_[i][j] = (dsq[i][j] == 0.0) ? share : 0.0;
             } else {
                 for (int i = 0; i < effective_c; ++i) {
-                    double denom = 0.0;
+                    float denom = 0.0;
                     for (int k = 0; k < effective_c; ++k)
                         denom += std::pow(dsq[i][j] / dsq[k][j], exp_um);
                     U_[i][j] = 1.0 / denom;
@@ -81,9 +81,9 @@ void PFCM::fit(const std::vector<std::vector<double>>& data) {
         // γ_i = Σ_j u_ij^m · d²_ij / Σ_j u_ij^m
         if (iter == 0) {
             for (int i = 0; i < effective_c; ++i) {
-                double num = 0.0, den = 0.0;
+                float num = 0.0, den = 0.0;
                 for (int j = 0; j < n; ++j) {
-                    double um = std::pow(U_[i][j], m_);
+                    float um = std::pow(U_[i][j], m_);
                     num += um * dsq[i][j];
                     den += um;
                 }
@@ -99,12 +99,12 @@ void PFCM::fit(const std::vector<std::vector<double>>& data) {
 
         // ── 5. Update centers ─────────────────────────────────────────────────
         // v_i = Σ_j (u_ij^m + α·t_ij^m)·x_j / Σ_j (u_ij^m + α·t_ij^m)
-        std::vector<std::vector<double>> new_centers(effective_c,
-                                                      std::vector<double>(dims, 0.0));
+        std::vector<std::vector<float>> new_centers(effective_c,
+                                                      std::vector<float>(dims, 0.0));
         for (int i = 0; i < effective_c; ++i) {
-            double weight_sum = 0.0;
+            float weight_sum = 0.0;
             for (int j = 0; j < n; ++j) {
-                double w = std::pow(U_[i][j], m_) + alpha_ * std::pow(T_[i][j], m_);
+                float w = std::pow(U_[i][j], m_) + alpha_ * std::pow(T_[i][j], m_);
                 weight_sum += w;
                 for (int d = 0; d < dims; ++d)
                     new_centers[i][d] += w * data[j][d];
@@ -117,9 +117,9 @@ void PFCM::fit(const std::vector<std::vector<double>>& data) {
         }
 
         // ── 6. Convergence check: max centroid shift ──────────────────────────
-        double max_shift = 0.0;
+        float max_shift = 0.0;
         for (int i = 0; i < effective_c; ++i) {
-            double shift = euclidean_distance(centers_[i], new_centers[i]);
+            float shift = euclidean_distance(centers_[i], new_centers[i]);
             if (shift > max_shift) max_shift = shift;
         }
         centers_ = std::move(new_centers);
@@ -130,9 +130,9 @@ void PFCM::fit(const std::vector<std::vector<double>>& data) {
     labels_.resize(n);
     for (int j = 0; j < n; ++j) {
         int    best_i     = 0;
-        double best_score = U_[0][j] + alpha_ * T_[0][j];
+        float best_score = U_[0][j] + alpha_ * T_[0][j];
         for (int i = 1; i < effective_c; ++i) {
-            double score = U_[i][j] + alpha_ * T_[i][j];
+            float score = U_[i][j] + alpha_ * T_[i][j];
             if (score > best_score) { best_score = score; best_i = i; }
         }
         labels_[j] = best_i;
@@ -140,6 +140,6 @@ void PFCM::fit(const std::vector<std::vector<double>>& data) {
 }
 
 const std::vector<int>&                 PFCM::labels()       const { return labels_; }
-const std::vector<std::vector<double>>& PFCM::memberships()  const { return U_; }
-const std::vector<std::vector<double>>& PFCM::typicalities() const { return T_; }
-const std::vector<std::vector<double>>& PFCM::centers()      const { return centers_; }
+const std::vector<std::vector<float>>& PFCM::memberships()  const { return U_; }
+const std::vector<std::vector<float>>& PFCM::typicalities() const { return T_; }
+const std::vector<std::vector<float>>& PFCM::centers()      const { return centers_; }

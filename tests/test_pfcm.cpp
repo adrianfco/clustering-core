@@ -4,18 +4,18 @@
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-static std::vector<std::vector<double>> make_uniform_data(int n, int dims, double val = 1.0) {
-    return std::vector<std::vector<double>>(n, std::vector<double>(dims, val));
+static std::vector<std::vector<float>> make_uniform_data(int n, int dims, float val = 1.0) {
+    return std::vector<std::vector<float>>(n, std::vector<float>(dims, val));
 }
 
 // Two tight clusters: n points near origin, n points near (offset, offset, ...)
-static std::vector<std::vector<double>> make_separable_data(int n, int dims, double offset = 100.0) {
-    std::vector<std::vector<double>> data;
+static std::vector<std::vector<float>> make_separable_data(int n, int dims, float offset = 100.0) {
+    std::vector<std::vector<float>> data;
     data.reserve(2 * n);
     for (int i = 0; i < n; ++i)
-        data.push_back(std::vector<double>(dims, static_cast<double>(i % 5) * 0.01));
+        data.push_back(std::vector<float>(dims, static_cast<float>(i % 5) * 0.01));
     for (int i = 0; i < n; ++i)
-        data.push_back(std::vector<double>(dims, offset + static_cast<double>(i % 5) * 0.01));
+        data.push_back(std::vector<float>(dims, offset + static_cast<float>(i % 5) * 0.01));
     return data;
 }
 
@@ -94,7 +94,7 @@ TEST_CASE("PFCM c=1 assigns all points to cluster 0") {
 }
 
 TEST_CASE("PFCM empty data produces empty labels") {
-    std::vector<std::vector<double>> data;
+    std::vector<std::vector<float>> data;
     PFCM pf(3, 100, 2.0, 1.0);
     pf.fit(data);
     REQUIRE(pf.labels().empty());
@@ -111,7 +111,7 @@ TEST_CASE("PFCM membership matrix shape and FCM row-sum constraint") {
 
     // FCM constraint: for each point j, Σ_i u_ij == 1
     for (int j = 0; j < 20; ++j) {
-        double sum = 0.0;
+        float sum = 0.0;
         for (int i = 0; i < 2; ++i)
             sum += U[i][j];
         REQUIRE(std::abs(sum - 1.0) < 1e-9);

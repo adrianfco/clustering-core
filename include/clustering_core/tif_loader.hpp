@@ -12,8 +12,8 @@ struct GpuData {
 
 class TifLoader {
 public:
-    // Returns AoS double layout (CPU path): result[pixel][band].
-    static std::vector<std::vector<double>> load(const std::string& path);
+    // Returns AoS float layout (CPU path): result[pixel][band].
+    static std::vector<std::vector<float>> load(const std::string& path);
 
     // Returns SoA float layout (GPU path): pixels[band * n_pixels + pixel].
     // Reads each band as a contiguous block — no scatter, no conversion loop.
