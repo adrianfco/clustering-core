@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "clustering_core/tif_loader.hpp"
 #include "clustering_core/kmeans.hpp"
+#include "clustering_core/dataset.hpp"
 #include <gdal_priv.h>
 #include <cpl_vsi.h>
 #include <stdexcept>
@@ -9,10 +10,11 @@
 #include <vector>
 
 using Catch::Matchers::WithinAbs;
+using clustering::Dataset;
+using clustering::KMeansCpu;
+using clustering::Layout;
+using clustering::TifLoader;
 
-// Creates a GeoTIFF in GDAL's in-memory filesystem (/vsimem/).
-// Returns the vsimem path to pass to TifLoader::load().
-// Caller must VSIUnlink(path) after use.
 static std::string create_vsimem_tif(const std::string& name,
                                       int width, int height, int n_bands,
                                       const std::vector<std::vector<float>>& band_data) {
@@ -36,10 +38,7 @@ static std::string create_vsimem_tif(const std::string& name,
     return path;
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 TEST_CASE("TifLoader loads correct pixel count and band count") {
-    // 4x3 raster, 2 bands: band1 = all 1.0, band2 = all 2.0
     const int w = 4, h = 3, n_pixels = 12;
     std::vector<std::vector<float>> bands = {
         std::vector<float>(n_pixels, 1.0f),
@@ -47,14 +46,14 @@ TEST_CASE("TifLoader loads correct pixel count and band count") {
     };
     auto path = create_vsimem_tif("test_count.tif", w, h, 2, bands);
 
-    auto result = TifLoader::load(path);
+    auto data = TifLoader::load(path);
 
-    REQUIRE(result.size() == static_cast<std::size_t>(n_pixels));
-    REQUIRE(result[0].size() == 2);
+    REQUIRE(data.n == n_pixels);
+    REQUIRE(data.d == 2);
 
-    for (const auto& point : result) {
-        REQUIRE_THAT(point[0], WithinAbs(1.0, 1e-6));
-        REQUIRE_THAT(point[1], WithinAbs(2.0, 1e-6));
+    for (int p = 0; p < n_pixels; ++p) {
+        REQUIRE_THAT(data.at(p, 0), WithinAbs(1.0, 1e-6));
+        REQUIRE_THAT(data.at(p, 1), WithinAbs(2.0, 1e-6));
     }
 
     VSIUnlink(path.c_str());
@@ -62,10 +61,6 @@ TEST_CASE("TifLoader loads correct pixel count and band count") {
 
 TEST_CASE("TifLoader preserves per-pixel band values") {
     // 2x2 raster, 3 bands with known distinct values per pixel
-    // Pixels layout (row-major): p0=(0,0), p1=(1,0), p2=(0,1), p3=(1,1)
-    // band1: 10, 11, 12, 13
-    // band2: 20, 21, 22, 23
-    // band3: 30, 31, 32, 33
     std::vector<std::vector<float>> bands = {
         {10.f, 11.f, 12.f, 13.f},
         {20.f, 21.f, 22.f, 23.f},
@@ -73,16 +68,39 @@ TEST_CASE("TifLoader preserves per-pixel band values") {
     };
     auto path = create_vsimem_tif("test_values.tif", 2, 2, 3, bands);
 
-    auto result = TifLoader::load(path);
+    auto data = TifLoader::load(path);
 
-    REQUIRE(result.size() == 4);
-    REQUIRE(result[0].size() == 3);
+    REQUIRE(data.n == 4);
+    REQUIRE(data.d == 3);
 
     for (int p = 0; p < 4; ++p) {
-        REQUIRE_THAT(result[p][0], WithinAbs(10.0 + p, 1e-6));
-        REQUIRE_THAT(result[p][1], WithinAbs(20.0 + p, 1e-6));
-        REQUIRE_THAT(result[p][2], WithinAbs(30.0 + p, 1e-6));
+        REQUIRE_THAT(data.at(p, 0), WithinAbs(10.0 + p, 1e-6));
+        REQUIRE_THAT(data.at(p, 1), WithinAbs(20.0 + p, 1e-6));
+        REQUIRE_THAT(data.at(p, 2), WithinAbs(30.0 + p, 1e-6));
     }
+
+    VSIUnlink(path.c_str());
+}
+
+TEST_CASE("TifLoader returns requested layout") {
+    std::vector<std::vector<float>> bands = {
+        {1.f, 2.f, 3.f, 4.f},
+        {10.f, 20.f, 30.f, 40.f}
+    };
+    auto path = create_vsimem_tif("test_layout.tif", 2, 2, 2, bands);
+
+    auto soa = TifLoader::load(path, Layout::SoA);
+    auto aos = TifLoader::load(path, Layout::AoS);
+
+    REQUIRE(soa.layout == Layout::SoA);
+    REQUIRE(aos.layout == Layout::AoS);
+    REQUIRE(soa.n == aos.n);
+    REQUIRE(soa.d == aos.d);
+
+    // Both layouts must yield identical values via at()
+    for (int p = 0; p < soa.n; ++p)
+        for (int b = 0; b < soa.d; ++b)
+            REQUIRE_THAT(soa.at(p, b), WithinAbs(aos.at(p, b), 1e-6));
 
     VSIUnlink(path.c_str());
 }
@@ -94,8 +112,7 @@ TEST_CASE("TifLoader throws on nonexistent file") {
     );
 }
 
-TEST_CASE("TifLoader output is compatible with KMeans") {
-    // Load a small multi-band raster and pass directly to KMeans::fit()
+TEST_CASE("TifLoader output is compatible with KMeansCpu") {
     const int n_pixels = 6;
     std::vector<std::vector<float>> bands = {
         {1.f, 2.f, 3.f, 100.f, 101.f, 102.f},
@@ -104,9 +121,9 @@ TEST_CASE("TifLoader output is compatible with KMeans") {
     auto path = create_vsimem_tif("test_compat.tif", 3, 2, 2, bands);
 
     auto data = TifLoader::load(path);
-    REQUIRE(data.size() == static_cast<std::size_t>(n_pixels));
+    REQUIRE(data.n == n_pixels);
 
-    KMeans km(2, 200, 1e-6f, 42);
+    KMeansCpu km({.k = 2, .max_iters = 200, .tol = 1e-6f, .seed = 42});
     km.fit(data);
 
     REQUIRE(km.labels().size() == static_cast<std::size_t>(n_pixels));

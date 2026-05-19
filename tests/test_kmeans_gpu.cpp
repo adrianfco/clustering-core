@@ -1,103 +1,126 @@
 #include <catch2/catch_test_macros.hpp>
-#include "clustering_core/kmeans_gpu.hpp"
-#include "clustering_core/tif_loader.hpp"
+#include "clustering_core/kmeans.hpp"
+#include "clustering_core/dataset.hpp"
+#include <cstddef>
 #include <vector>
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-//
-// GpuData is SoA: pixels[b * n_pixels + p].
+using clustering::Dataset;
+using clustering::KMeansGpu;
+using clustering::KMeansParams;
+using clustering::Layout;
 
-static GpuData make_uniform_gpu(int n, int B, float val = 1.f) {
-    GpuData d;
-    d.n_pixels = n;
-    d.n_bands  = B;
-    d.pixels.assign(static_cast<size_t>(B) * n, val);
+// SoA-flat Dataset: features[b * n + p]
+
+static Dataset make_uniform_gpu(int n, int B, float val = 1.f) {
+    Dataset d;
+    d.n = n;
+    d.d = B;
+    d.layout = Layout::SoA;
+    d.features.assign(static_cast<std::size_t>(B) * n, val);
     return d;
 }
 
-// Two tight clusters: n points near 0, n points near `offset` in every band.
-static GpuData make_separable_gpu(int n, int B, float offset = 100.f) {
+static Dataset make_separable_gpu(int n, int B, float offset = 100.f) {
     const int N = 2 * n;
-    GpuData d;
-    d.n_pixels = N;
-    d.n_bands  = B;
-    d.pixels.resize(static_cast<size_t>(B) * N);
+    Dataset d;
+    d.n = N;
+    d.d = B;
+    d.layout = Layout::SoA;
+    d.features.resize(static_cast<std::size_t>(B) * N);
     for (int b = 0; b < B; ++b) {
         for (int p = 0; p < n; ++p)
-            d.pixels[static_cast<size_t>(b) * N + p] =
+            d.features[static_cast<std::size_t>(b) * N + p] =
                 static_cast<float>(p % 5) * 0.01f;
         for (int p = 0; p < n; ++p)
-            d.pixels[static_cast<size_t>(b) * N + n + p] =
+            d.features[static_cast<std::size_t>(b) * N + n + p] =
                 offset + static_cast<float>(p % 5) * 0.01f;
     }
     return d;
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-TEST_CASE("kmeans_gpu label count matches input size", "[gpu]") {
+TEST_CASE("KMeansGpu label count matches input size", "[gpu]") {
     auto data = make_uniform_gpu(10, 2);
-    auto labels = kmeans_gpu(data, 3, 100);
-    REQUIRE(labels.size() == 10);
+    KMeansGpu km({.k = 3, .max_iters = 100});
+    km.fit(data);
+    REQUIRE(km.labels().size() == 10);
 }
 
-TEST_CASE("kmeans_gpu empty data produces empty labels", "[gpu]") {
-    GpuData empty;
-    auto labels = kmeans_gpu(empty, 3, 100);
-    REQUIRE(labels.empty());
+TEST_CASE("KMeansGpu empty data produces empty labels", "[gpu]") {
+    Dataset empty;
+    KMeansGpu km({.k = 3, .max_iters = 100});
+    km.fit(empty);
+    REQUIRE(km.labels().empty());
+    REQUIRE(km.centroids().empty());
 }
 
-TEST_CASE("kmeans_gpu reproducibility with same seed", "[gpu]") {
+TEST_CASE("KMeansGpu reproducibility with same seed", "[gpu]") {
     auto data = make_separable_gpu(20, 2);
-    auto labels1 = kmeans_gpu(data, 3, 200, 1e-6f, 42);
-    auto labels2 = kmeans_gpu(data, 3, 200, 1e-6f, 42);
-    REQUIRE(labels1 == labels2);
+    KMeansGpu km1({.k = 3, .max_iters = 200, .tol = 1e-6f, .seed = 42});
+    KMeansGpu km2({.k = 3, .max_iters = 200, .tol = 1e-6f, .seed = 42});
+    km1.fit(data);
+    km2.fit(data);
+    REQUIRE(km1.labels() == km2.labels());
 }
 
-TEST_CASE("kmeans_gpu convergence on clearly separable data", "[gpu]") {
+TEST_CASE("KMeansGpu convergence on clearly separable data", "[gpu]") {
     auto data = make_separable_gpu(50, 2, 100.f);
-    auto labels = kmeans_gpu(data, 2, 500, 1e-6f, 42);
+    KMeansGpu km({.k = 2, .max_iters = 500, .tol = 1e-6f, .seed = 42});
+    km.fit(data);
 
-    REQUIRE(labels.size() == 100);
+    REQUIRE(km.labels().size() == 100);
 
-    // All first 50 must share one label; all last 50 must share the other
-    int label_a = labels[0];
-    int label_b = labels[50];
+    int label_a = km.labels()[0];
+    int label_b = km.labels()[50];
     REQUIRE(label_a != label_b);
 
     for (int i = 0; i < 50; ++i)
-        REQUIRE(labels[i] == label_a);
+        REQUIRE(km.labels()[i] == label_a);
     for (int i = 50; i < 100; ++i)
-        REQUIRE(labels[i] == label_b);
+        REQUIRE(km.labels()[i] == label_b);
 }
 
-TEST_CASE("kmeans_gpu k=1 assigns all points to cluster 0", "[gpu]") {
+TEST_CASE("KMeansGpu k=1 assigns all points to cluster 0", "[gpu]") {
     auto data = make_separable_gpu(10, 3);
-    auto labels = kmeans_gpu(data, 1, 100);
+    KMeansGpu km({.k = 1, .max_iters = 100});
+    km.fit(data);
 
-    REQUIRE(labels.size() == 20);
-    for (int l : labels)
+    REQUIRE(km.labels().size() == 20);
+    for (int l : km.labels())
         REQUIRE(l == 0);
 }
 
-TEST_CASE("kmeans_gpu edge case: all identical points", "[gpu]") {
+TEST_CASE("KMeansGpu edge case: all identical points", "[gpu]") {
     auto data = make_uniform_gpu(10, 3, 5.f);
-    auto labels = kmeans_gpu(data, 3, 50, 1e-4f, 42);
+    KMeansGpu km({.k = 3, .max_iters = 50, .tol = 1e-4f, .seed = 42});
+    km.fit(data);
 
-    REQUIRE(labels.size() == 10);
-    int first = labels[0];
-    for (int l : labels)
+    REQUIRE(km.labels().size() == 10);
+    int first = km.labels()[0];
+    for (int l : km.labels())
         REQUIRE(l == first);
 }
 
-TEST_CASE("kmeans_gpu labels stay within requested k clusters", "[gpu]") {
+TEST_CASE("KMeansGpu labels stay within requested k clusters", "[gpu]") {
     auto data = make_separable_gpu(30, 4);
     const int k = 3;
-    auto labels = kmeans_gpu(data, k, 100, 1e-4f, 42);
+    KMeansGpu km({.k = k, .max_iters = 100, .tol = 1e-4f, .seed = 42});
+    km.fit(data);
 
-    REQUIRE(labels.size() == 60);
-    for (int l : labels) {
+    REQUIRE(km.labels().size() == 60);
+    for (int l : km.labels()) {
         REQUIRE(l >= 0);
         REQUIRE(l < k);
     }
+}
+
+TEST_CASE("KMeansGpu accepts AoS input via internal conversion", "[gpu]") {
+    auto soa = make_separable_gpu(20, 2);
+    Dataset aos = soa.as(Layout::AoS);
+
+    KMeansGpu km_soa({.k = 2, .max_iters = 200, .tol = 1e-6f, .seed = 42});
+    KMeansGpu km_aos({.k = 2, .max_iters = 200, .tol = 1e-6f, .seed = 42});
+    km_soa.fit(soa);
+    km_aos.fit(aos);
+
+    REQUIRE(km_soa.labels() == km_aos.labels());
 }

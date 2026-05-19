@@ -1,145 +1,186 @@
 #include "clustering_core/pfcm.hpp"
-#include "utils.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <numeric>
 #include <random>
 
-PFCM::PFCM(int c, int max_iters, float m, float alpha, float tol, int seed)
-    : c_(c), max_iters_(max_iters), m_(m), alpha_(alpha), tol_(tol), seed_(seed) {}
+namespace clustering {
 
-void PFCM::fit(const std::vector<std::vector<float>>& data) {
-    const int n = static_cast<int>(data.size());
-    if (n == 0) return;
+namespace {
 
-    const int dims        = static_cast<int>(data[0].size());
-    const int effective_c = std::min(c_, n);
+inline float sq_dist(const float* a, const float* b, int d) {
+    float s = 0.f;
+    for (int i = 0; i < d; ++i) {
+        float diff = a[i] - b[i];
+        s += diff * diff;
+    }
+    return s;
+}
 
-    std::mt19937 rng(static_cast<unsigned>(seed_));
+inline void copy_row(float* dst, const float* src, int d) {
+    for (int i = 0; i < d; ++i) dst[i] = src[i];
+}
 
-    // Max-min init: pick first center randomly, then each subsequent center as
-    // the point farthest from all already-selected centers. This guarantees
-    // spread and avoids the degenerate case where soft-membership FCM/PFCM
-    // collapses when two centers start at the same location.
-    centers_.assign(effective_c, std::vector<float>(dims));
-    std::uniform_int_distribution<int> dist(0, n - 1);
-    centers_[0] = data[dist(rng)];
-    for (int ci = 1; ci < effective_c; ++ci) {
-        int best_j = 0;
-        float best_dist = -1.0;
+} // namespace
+
+PfcmCpu::PfcmCpu(PfcmParams params) : params_(params) {}
+
+void PfcmCpu::fit(const Dataset& data) {
+    labels_.clear();
+    centroids_.clear();
+    U_.clear();
+    T_.clear();
+    n_iters_   = 0;
+    converged_ = false;
+
+    const int n = data.n;
+    const int d = data.d;
+    if (n == 0 || d == 0) return;
+
+    const int   c          = std::min(params_.c, n);
+    const float m          = params_.m;
+    const float alpha      = params_.alpha;
+    const float exp_um     = 1.f / (m - 1.f);
+
+    const Dataset aos = data.as(Layout::AoS);
+    const float*  feat = aos.features.data();
+
+    std::mt19937 rng(static_cast<unsigned>(params_.seed));
+
+    // Max-min init: first center random, then farthest-from-existing.
+    centroids_.assign(static_cast<std::size_t>(c) * d, 0.f);
+    {
+        std::uniform_int_distribution<int> dist(0, n - 1);
+        copy_row(centroids_.data(),
+                 feat + static_cast<std::size_t>(dist(rng)) * d, d);
+    }
+    for (int ci = 1; ci < c; ++ci) {
+        int   best_j     = 0;
+        float best_score = -1.f;
         for (int j = 0; j < n; ++j) {
+            const float* x = feat + static_cast<std::size_t>(j) * d;
             float min_d = std::numeric_limits<float>::max();
             for (int k = 0; k < ci; ++k) {
-                float d = euclidean_distance(centers_[k], data[j]);
-                if (d < min_d) min_d = d;
+                float s = sq_dist(x, centroids_.data() + static_cast<std::size_t>(k) * d, d);
+                if (s < min_d) min_d = s;
             }
-            if (min_d > best_dist) { best_dist = min_d; best_j = j; }
+            if (min_d > best_score) { best_score = min_d; best_j = j; }
         }
-        centers_[ci] = data[best_j];
+        copy_row(centroids_.data() + static_cast<std::size_t>(ci) * d,
+                 feat + static_cast<std::size_t>(best_j) * d, d);
     }
 
-    U_.assign(effective_c, std::vector<float>(n, 0.0));
-    T_.assign(effective_c, std::vector<float>(n, 0.0));
-    gamma_.assign(effective_c, 1.0);
+    const std::size_t cn = static_cast<std::size_t>(c) * n;
+    U_.assign(cn, 0.f);
+    T_.assign(cn, 0.f);
+    std::vector<float> gamma(c, 1.f);
+    std::vector<float> dsq(cn);
+    std::vector<float> new_centroids(static_cast<std::size_t>(c) * d);
 
-    const float exp_um = 1.0 / (m_ - 1.0); // exponent for U and T updates
+    for (int iter = 0; iter < params_.max_iters; ++iter) {
+        ++n_iters_;
 
-    for (int iter = 0; iter < max_iters_; ++iter) {
+        //  1. Squared distances dsq[i*n + j] 
+        for (int i = 0; i < c; ++i) {
+            const float* ci_row = centroids_.data() + static_cast<std::size_t>(i) * d;
+            float*       drow   = dsq.data() + static_cast<std::size_t>(i) * n;
+            for (int j = 0; j < n; ++j)
+                drow[j] = sq_dist(ci_row, feat + static_cast<std::size_t>(j) * d, d);
+        }
 
-        // ── 1. Compute squared distances d²[i][j] ────────────────────────────
-        std::vector<std::vector<float>> dsq(effective_c, std::vector<float>(n));
-        for (int i = 0; i < effective_c; ++i)
-            for (int j = 0; j < n; ++j) {
-                float d = euclidean_distance(centers_[i], data[j]);
-                dsq[i][j] = d * d;
-            }
-
-        // ── 2. Update U (fuzzy memberships) ──────────────────────────────────
-        // u_ij = [Σ_k (d²_ij / d²_kj)^(1/(m-1))]^(-1)
+        //  2. Update U (fuzzy memberships) 
         for (int j = 0; j < n; ++j) {
-            // Zero-distance guard: point coincides with one or more centers
             int zero_count = 0;
-            for (int i = 0; i < effective_c; ++i)
-                if (dsq[i][j] == 0.0) ++zero_count;
+            for (int i = 0; i < c; ++i)
+                if (dsq[static_cast<std::size_t>(i) * n + j] == 0.f) ++zero_count;
 
             if (zero_count > 0) {
-                float share = 1.0 / zero_count;
-                for (int i = 0; i < effective_c; ++i)
-                    U_[i][j] = (dsq[i][j] == 0.0) ? share : 0.0;
+                float share = 1.f / static_cast<float>(zero_count);
+                for (int i = 0; i < c; ++i) {
+                    float v = dsq[static_cast<std::size_t>(i) * n + j];
+                    U_[static_cast<std::size_t>(i) * n + j] = (v == 0.f) ? share : 0.f;
+                }
             } else {
-                for (int i = 0; i < effective_c; ++i) {
-                    float denom = 0.0;
-                    for (int k = 0; k < effective_c; ++k)
-                        denom += std::pow(dsq[i][j] / dsq[k][j], exp_um);
-                    U_[i][j] = 1.0 / denom;
+                for (int i = 0; i < c; ++i) {
+                    float denom = 0.f;
+                    float dij = dsq[static_cast<std::size_t>(i) * n + j];
+                    for (int k = 0; k < c; ++k)
+                        denom += std::pow(dij / dsq[static_cast<std::size_t>(k) * n + j], exp_um);
+                    U_[static_cast<std::size_t>(i) * n + j] = 1.f / denom;
                 }
             }
         }
 
-        // ── 3. Compute γ_i once (after first U update) ───────────────────────
-        // γ_i = Σ_j u_ij^m · d²_ij / Σ_j u_ij^m
+        //  3. Compute γ_i once (after first U update) 
         if (iter == 0) {
-            for (int i = 0; i < effective_c; ++i) {
-                float num = 0.0, den = 0.0;
+            for (int i = 0; i < c; ++i) {
+                float num = 0.f, den = 0.f;
                 for (int j = 0; j < n; ++j) {
-                    float um = std::pow(U_[i][j], m_);
-                    num += um * dsq[i][j];
+                    float um = std::pow(U_[static_cast<std::size_t>(i) * n + j], m);
+                    num += um * dsq[static_cast<std::size_t>(i) * n + j];
                     den += um;
                 }
-                gamma_[i] = (den > 0.0 && num > 0.0) ? (num / den) : 1.0;
+                gamma[i] = (den > 0.f && num > 0.f) ? (num / den) : 1.f;
             }
         }
 
-        // ── 4. Update T (possibilistic typicalities) ──────────────────────────
-        // t_ij = [1 + (d²_ij / γ_i)^(1/(m-1))]^(-1)
-        for (int i = 0; i < effective_c; ++i)
+        //  4. Update T (possibilistic typicalities) 
+        for (int i = 0; i < c; ++i) {
+            float g = gamma[i];
             for (int j = 0; j < n; ++j)
-                T_[i][j] = 1.0 / (1.0 + std::pow(dsq[i][j] / gamma_[i], exp_um));
+                T_[static_cast<std::size_t>(i) * n + j] =
+                    1.f / (1.f + std::pow(dsq[static_cast<std::size_t>(i) * n + j] / g, exp_um));
+        }
 
-        // ── 5. Update centers ─────────────────────────────────────────────────
-        // v_i = Σ_j (u_ij^m + α·t_ij^m)·x_j / Σ_j (u_ij^m + α·t_ij^m)
-        std::vector<std::vector<float>> new_centers(effective_c,
-                                                      std::vector<float>(dims, 0.0));
-        for (int i = 0; i < effective_c; ++i) {
-            float weight_sum = 0.0;
+        //  5. Update centers 
+        std::fill(new_centroids.begin(), new_centroids.end(), 0.f);
+        for (int i = 0; i < c; ++i) {
+            float* ci_row = new_centroids.data() + static_cast<std::size_t>(i) * d;
+            float weight_sum = 0.f;
             for (int j = 0; j < n; ++j) {
-                float w = std::pow(U_[i][j], m_) + alpha_ * std::pow(T_[i][j], m_);
+                float um = std::pow(U_[static_cast<std::size_t>(i) * n + j], m);
+                float tm = std::pow(T_[static_cast<std::size_t>(i) * n + j], m);
+                float w  = um + alpha * tm;
                 weight_sum += w;
-                for (int d = 0; d < dims; ++d)
-                    new_centers[i][d] += w * data[j][d];
+                const float* x = feat + static_cast<std::size_t>(j) * d;
+                for (int b = 0; b < d; ++b) ci_row[b] += w * x[b];
             }
-            if (weight_sum > 0.0)
-                for (int d = 0; d < dims; ++d)
-                    new_centers[i][d] /= weight_sum;
-            else
-                new_centers[i] = centers_[i]; // degenerate: keep old center
+            if (weight_sum > 0.f) {
+                float inv = 1.f / weight_sum;
+                for (int b = 0; b < d; ++b) ci_row[b] *= inv;
+            } else {
+                copy_row(ci_row, centroids_.data() + static_cast<std::size_t>(i) * d, d);
+            }
         }
 
-        // ── 6. Convergence check: max centroid shift ──────────────────────────
-        float max_shift = 0.0;
-        for (int i = 0; i < effective_c; ++i) {
-            float shift = euclidean_distance(centers_[i], new_centers[i]);
-            if (shift > max_shift) max_shift = shift;
+        //  6. Convergence: max centroid shift 
+        float max_shift_sq = 0.f;
+        for (int i = 0; i < c; ++i) {
+            float s = sq_dist(centroids_.data() + static_cast<std::size_t>(i) * d,
+                              new_centroids.data() + static_cast<std::size_t>(i) * d, d);
+            if (s > max_shift_sq) max_shift_sq = s;
         }
-        centers_ = std::move(new_centers);
-        if (max_shift < tol_) break;
+        centroids_.swap(new_centroids);
+        if (max_shift_sq < params_.tol * params_.tol) {
+            converged_ = true;
+            break;
+        }
     }
 
-    // ── 7. Assign hard labels: argmax_i (u_ij + α·t_ij) ─────────────────────
-    labels_.resize(n);
+    //  7. Hard labels: argmax_i (u_ij + α·t_ij) 
+    labels_.assign(n, 0);
     for (int j = 0; j < n; ++j) {
-        int    best_i     = 0;
-        float best_score = U_[0][j] + alpha_ * T_[0][j];
-        for (int i = 1; i < effective_c; ++i) {
-            float score = U_[i][j] + alpha_ * T_[i][j];
+        int   best_i     = 0;
+        float best_score = U_[j] + alpha * T_[j];
+        for (int i = 1; i < c; ++i) {
+            float score = U_[static_cast<std::size_t>(i) * n + j]
+                        + alpha * T_[static_cast<std::size_t>(i) * n + j];
             if (score > best_score) { best_score = score; best_i = i; }
         }
         labels_[j] = best_i;
     }
 }
 
-const std::vector<int>&                 PFCM::labels()       const { return labels_; }
-const std::vector<std::vector<float>>& PFCM::memberships()  const { return U_; }
-const std::vector<std::vector<float>>& PFCM::typicalities() const { return T_; }
-const std::vector<std::vector<float>>& PFCM::centers()      const { return centers_; }
+} // namespace clustering
